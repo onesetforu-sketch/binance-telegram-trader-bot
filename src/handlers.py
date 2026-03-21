@@ -6,7 +6,7 @@ Each handler corresponds to a bot command or interaction.
 import os
 import logging
 from functools import wraps
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import ContextTypes
 from binance.client import Client as BinanceClient
 
@@ -51,21 +51,41 @@ def get_binance_client() -> BinanceClient:
 @restricted
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "👋 *Welcome to Binance Trader Bot!*\n\n"
-        "I can help you trade and monitor your Binance account directly from Telegram.\n\n"
-        "*Available Commands:*\n"
-        "📊 /price `<SYMBOL>` — Get latest price\n"
-        "📈 /stats `<SYMBOL>` — 24h market stats\n"
-        "💼 /balance — View account balances\n"
-        "🟢 /buy `<SYMBOL> <QTY>` — Market buy order\n"
-        "🔴 /sell `<SYMBOL> <QTY>` — Market sell order\n"
-        "📋 /limitbuy `<SYMBOL> <QTY> <PRICE>` — Limit buy\n"
-        "📋 /limitsell `<SYMBOL> <QTY> <PRICE>` — Limit sell\n"
-        "📂 /openorders `[SYMBOL]` — List open orders\n"
-        "❌ /cancel `<SYMBOL> <ORDER_ID>` — Cancel an order\n"
-        "🕓 /history `<SYMBOL>` — Recent order history\n"
-        "🕯 /candles `<SYMBOL> [INTERVAL]` — Candlestick data\n"
-        "ℹ️ /help — Show this help message\n\n"
+        "👋 *Welcome to Binance Trader Bot + PAXG Gold Engine!*\n\n"
+        "I combine standard Binance trading with a 5-factor macro gold analysis engine.\n\n"
+
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💎 *PAXG Gold Auto-Trader*\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "/goldanalysis — Full 5-factor macro analysis\n"
+        "/goldscore — Quick composite score & signal\n"
+        "/goldregime — Current market regime (A/B/C/D)\n"
+        "/goldrisks — Active risk flags & bearish triggers\n"
+        "/paxgposition — PAXG position & unrealized P&L\n"
+        "/autotrade `on|off` — Enable/disable auto-trading\n"
+        "/dryrun — Simulate a trade (no real order)\n"
+        "/tradeconfig — View risk & sizing configuration\n"
+        "/tradehistory — Recent auto-trade log\n\n"
+
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "📊 *Market Data*\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "/price `<SYMBOL>` — Latest price\n"
+        "/stats `<SYMBOL>` — 24h market stats\n"
+        "/candles `<SYMBOL> [INTERVAL]` — Candlestick data\n\n"
+
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💼 *Account & Trading*\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "/balance — Account balances\n"
+        "/buy `<SYMBOL> <QTY>` — Market buy\n"
+        "/sell `<SYMBOL> <QTY>` — Market sell\n"
+        "/limitbuy `<SYMBOL> <QTY> <PRICE>` — Limit buy\n"
+        "/limitsell `<SYMBOL> <QTY> <PRICE>` — Limit sell\n"
+        "/openorders `[SYMBOL]` — Open orders\n"
+        "/cancel `<SYMBOL> <ORDER_ID>` — Cancel order\n"
+        "/history `<SYMBOL>` — Order history\n\n"
+
         "_Intervals: 1m, 5m, 15m, 1h, 4h, 1d_"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
