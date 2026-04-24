@@ -3,8 +3,8 @@ Binance Telegram Trader Bot — Entry Point
 ==========================================
 Includes:
   - Standard Binance trading commands
-  - PAXG Gold Auto-Trader with 5-factor macro engine
-  - Background scheduler for periodic analysis and alerts
+  - Price-Action (PA) strategy for PAXG/USDT (VWAP + key levels + volume)
+  - Background scheduler that emits fresh PA alerts on a fixed cadence
 """
 
 import logging
@@ -34,17 +34,11 @@ from src.handlers import (
     candles,
 )
 
-# PAXG Gold Auto-Trader handlers
-from src.paxg_handlers import (
-    gold_analysis,
-    gold_score,
-    gold_regime,
-    paxg_position,
-    autotrade,
-    trade_config,
-    dry_run,
-    gold_risks,
-    trade_history,
+# Price-Action strategy handlers (replaces the PAXG macro engine).
+from src.pa_handlers import (
+    pa_levels_command,
+    pa_signal_command,
+    pa_strategy_command,
 )
 
 # Background scheduler
@@ -68,7 +62,7 @@ def _startup_banner() -> None:
     allowed_id = get_allowed_user_id()
 
     logger.info("=" * 60)
-    logger.info("Binance Telegram Trader Bot — PAXG Gold Engine")
+    logger.info("Binance Telegram Trader Bot — PAXG Price-Action Engine")
     logger.info("-" * 60)
     logger.info("Binance mode       : %s", mode)
     logger.info("Analysis interval  : every %d minute(s)", ANALYSIS_INTERVAL_MINUTES)
@@ -84,8 +78,8 @@ def _startup_banner() -> None:
 
     if not is_testnet:
         logger.warning(
-            "LIVE MAINNET mode: real funds are at risk. "
-            "Verify /tradeconfig risk settings before enabling /autotrade on."
+            "LIVE MAINNET mode: real funds are at risk on manual /buy /sell commands. "
+            "The PA strategy itself is ALERT-ONLY — no orders are placed from signals."
         )
     logger.info("=" * 60)
 
@@ -113,7 +107,7 @@ async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def post_init(application):
     """Called after the bot is initialized — start the background scheduler."""
     start_scheduler(application.bot)
-    logger.info("Background macro analysis scheduler started.")
+    logger.info("Background PA analysis scheduler started.")
 
 
 def main():
@@ -122,7 +116,7 @@ def main():
         raise ValueError("TELEGRAM_BOT_TOKEN is not set. Please configure your .env file.")
 
     _startup_banner()
-    logger.info("Starting Binance Telegram Trader Bot with PAXG Gold Engine...")
+    logger.info("Starting Binance Telegram Trader Bot with PA strategy...")
 
     app = (
         ApplicationBuilder()
@@ -146,16 +140,10 @@ def main():
     app.add_handler(CommandHandler("history", history))
     app.add_handler(CommandHandler("candles", candles))
 
-    # ── PAXG Gold Auto-Trader Commands ─────────────────────────────────────
-    app.add_handler(CommandHandler("goldanalysis", gold_analysis))
-    app.add_handler(CommandHandler("goldscore", gold_score))
-    app.add_handler(CommandHandler("goldregime", gold_regime))
-    app.add_handler(CommandHandler("paxgposition", paxg_position))
-    app.add_handler(CommandHandler("autotrade", autotrade))
-    app.add_handler(CommandHandler("tradeconfig", trade_config))
-    app.add_handler(CommandHandler("dryrun", dry_run))
-    app.add_handler(CommandHandler("goldrisks", gold_risks))
-    app.add_handler(CommandHandler("tradehistory", trade_history))
+    # ── Price-Action Strategy Commands ─────────────────────────────────────
+    app.add_handler(CommandHandler("palevels", pa_levels_command))
+    app.add_handler(CommandHandler("pasignal", pa_signal_command))
+    app.add_handler(CommandHandler("pastrategy", pa_strategy_command))
 
     # Global error handler — logs any uncaught exception from a handler.
     app.add_error_handler(_on_error)

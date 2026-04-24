@@ -35,21 +35,16 @@ def get_binance_client() -> BinanceClient:
 @restricted
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "👋 *Welcome to Binance Trader Bot + PAXG Gold Engine!*\n\n"
-        "I combine standard Binance trading with a 5-factor macro gold analysis engine.\n\n"
+        "👋 *Welcome to Binance Trader Bot + PAXG PA Strategy!*\n\n"
+        "Standard Binance trading + a rule-based price-action strategy for "
+        "PAXG/USDT (VWAP + key levels + volume). Alerts only — no auto-execute.\n\n"
 
         "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "💎 *PAXG Gold Auto-Trader*\n"
+        "📈 *PAXG Price-Action Strategy*\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "/goldanalysis — Full 5-factor macro analysis\n"
-        "/goldscore — Quick composite score & signal\n"
-        "/goldregime — Current market regime (A/B/C/D)\n"
-        "/goldrisks — Active risk flags & bearish triggers\n"
-        "/paxgposition — PAXG position & unrealized P&L\n"
-        "/autotrade `on|off` — Enable/disable auto-trading\n"
-        "/dryrun — Simulate a trade (no real order)\n"
-        "/tradeconfig — View risk & sizing configuration\n"
-        "/tradehistory — Recent auto-trade log\n\n"
+        "/palevels — Yesterday H/L, Asia H/L, round levels, VWAP\n"
+        "/pasignal — Current bias (LONG / SHORT / NO_SETUP) + checklist\n"
+        "/pastrategy `on|off|status` — Toggle alert broadcasting\n\n"
 
         "━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "📊 *Market Data*\n"
