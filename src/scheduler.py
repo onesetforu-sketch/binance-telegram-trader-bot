@@ -94,17 +94,37 @@ async def run_analysis_cycle(bot: Bot):
         # Always update last-seen bias / level so we don't re-alert on the same setup.
         state["last_signal_bias"] = bias
         state["last_signal_broken_level"] = signal.get("broken_level")
+        # Successful cycle — clear any previously recorded error so we alert
+        # the user again if a new failure appears later.
+        if state.get("last_error_message"):
+            state["last_error_message"] = None
         save_pa_state(state)
 
     except Exception as e:
         logger.exception("PA analysis cycle failed")
+        # Dedupe error alerts: only notify the user when the error message
+        # changes, so a sustained Binance outage doesn't spam every cycle.
+        err_msg = f"{type(e).__name__}: {e}"
         try:
-            await bot.send_message(
-                chat_id=allowed_user_id,
-                text=f"⚠️ PA analysis cycle failed: {e}",
-            )
+            state = load_pa_state()
         except Exception:
-            logger.exception("Failed to deliver PA-failure alert")
+            state = None
+        if state is not None and state.get("last_error_message") != err_msg:
+            try:
+                await bot.send_message(
+                    chat_id=allowed_user_id,
+                    text=f"⚠️ PA analysis cycle failed: {err_msg}",
+                )
+            except Exception:
+                logger.exception("Failed to deliver PA-failure alert")
+            state["last_error_message"] = err_msg
+            state["last_error_time"] = datetime.now(timezone.utc).strftime(
+                "%Y-%m-%d %H:%M UTC"
+            )
+            try:
+                save_pa_state(state)
+            except Exception:
+                logger.exception("Failed to persist PA error state")
 
 
 def start_scheduler(bot: Bot) -> AsyncIOScheduler:

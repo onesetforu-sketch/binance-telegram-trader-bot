@@ -27,6 +27,7 @@ through the existing ``src.binance_client`` wrapper). No new APIs needed.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -391,12 +392,35 @@ def compute_signal(client=None) -> dict:
         "candle_confirm": None,
     }
 
-    if long_bias and up_broken is not None and volume_spike and bullish_candle:
+    long_invalidated = (
+        long_bias and up_broken is not None and price < up_broken
+    )
+    short_invalidated = (
+        (not long_bias) and down_broken is not None and price > down_broken
+    )
+
+    if (
+        long_bias
+        and up_broken is not None
+        and volume_spike
+        and bullish_candle
+        and not long_invalidated
+    ):
         sl = round(min(last_low, up_broken * 0.998), 2)
         risk = price - sl
         if risk <= 0:
-            risk = max(price - up_broken * 0.998, 0.01)
-            sl = round(price - risk, 2)
+            # Pathological geometry — abort rather than emit a bad signal.
+            return {
+                **base,
+                "bias": "NO_SETUP",
+                "reason": (
+                    f"LONG invalidated: entry ${price:,.2f} is not above broken "
+                    f"level ${up_broken:,.2f} after geometry check."
+                ),
+                "vwap": round(vwap, 2),
+                "volume_ratio": round(vol_ratio, 2),
+                "checklist": checklist,
+            }
         # Target the next resistance; if RR < 2, override with 1:2 target.
         tp_candidate = nearest_res if nearest_res is not None and nearest_res > price else None
         if tp_candidate is None or (tp_candidate - price) / risk < RR_RATIO:
@@ -413,7 +437,7 @@ def compute_signal(client=None) -> dict:
             "stop_loss": sl,
             "take_profit": tp,
             "risk_per_unit": round(risk, 4),
-            "rr": round(rr, 2) if rr else None,
+            "rr": round(rr, 2) if rr is not None else None,
             "broken_level": round(up_broken, 2),
             "nearest_resistance": round(nearest_res, 2) if nearest_res else None,
             "nearest_support": round(nearest_sup, 2) if nearest_sup else None,
@@ -427,12 +451,27 @@ def compute_signal(client=None) -> dict:
             ),
         }
 
-    if (not long_bias) and down_broken is not None and volume_spike and bearish_candle:
+    if (
+        (not long_bias)
+        and down_broken is not None
+        and volume_spike
+        and bearish_candle
+        and not short_invalidated
+    ):
         sl = round(max(last_high, down_broken * 1.002), 2)
         risk = sl - price
         if risk <= 0:
-            risk = max(down_broken * 1.002 - price, 0.01)
-            sl = round(price + risk, 2)
+            return {
+                **base,
+                "bias": "NO_SETUP",
+                "reason": (
+                    f"SHORT invalidated: entry ${price:,.2f} is not below broken "
+                    f"level ${down_broken:,.2f} after geometry check."
+                ),
+                "vwap": round(vwap, 2),
+                "volume_ratio": round(vol_ratio, 2),
+                "checklist": checklist,
+            }
         tp_candidate = nearest_sup if nearest_sup is not None and nearest_sup < price else None
         if tp_candidate is None or (price - tp_candidate) / risk < RR_RATIO:
             tp = round(price - RR_RATIO * risk, 2)
@@ -448,7 +487,7 @@ def compute_signal(client=None) -> dict:
             "stop_loss": sl,
             "take_profit": tp,
             "risk_per_unit": round(risk, 4),
-            "rr": round(rr, 2) if rr else None,
+            "rr": round(rr, 2) if rr is not None else None,
             "broken_level": round(down_broken, 2),
             "nearest_resistance": round(nearest_res, 2) if nearest_res else None,
             "nearest_support": round(nearest_sup, 2) if nearest_sup else None,
@@ -474,6 +513,10 @@ def compute_signal(client=None) -> dict:
         missing.append("last 15m candle not bullish")
     if (not long_bias) and not bearish_candle:
         missing.append("last 15m candle not bearish")
+    if long_invalidated:
+        missing.append("price pulled back below broken level (invalidated)")
+    if short_invalidated:
+        missing.append("price pulled back above broken level (invalidated)")
 
     return {
         **base,
@@ -491,11 +534,9 @@ def compute_signal(client=None) -> dict:
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────
 # Persisted alert state
-# ─────────────────────────────────────────────────────────────────────────────
-
-import json
+# ─────────────────────────────────────────────────────────────────────────
 
 
 def _default_pa_state() -> dict:
@@ -505,6 +546,8 @@ def _default_pa_state() -> dict:
         "last_signal_broken_level": None,
         "last_alert_time": None,
         "signals_seen": 0,
+        "last_error_message": None,
+        "last_error_time": None,
     }
 
 

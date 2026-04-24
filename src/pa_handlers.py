@@ -130,6 +130,8 @@ def _format_levels_message(levels: dict) -> str:
 @restricted
 async def pa_levels_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """`/palevels` — show today's key levels + VWAP."""
+    if update.message is None:
+        return
     msg = await update.message.reply_text("📍 Fetching PA key levels...")
     try:
         levels = compute_key_levels()
@@ -142,6 +144,8 @@ async def pa_levels_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 @restricted
 async def pa_signal_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """`/pasignal` — show current PA bias with checklist."""
+    if update.message is None:
+        return
     msg = await update.message.reply_text("🔎 Evaluating PA signal...")
     try:
         signal = compute_signal()
