@@ -28,24 +28,43 @@ Risk Rules:
 import os
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from src.binance_client import get_client, place_market_order, get_ticker_price
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_float_env(name: str, default: float) -> float:
+    raw = os.getenv(name, "")
+    if not raw:
+        return default
+    try:
+        return float(raw.strip())
+    except ValueError:
+        logger.warning("Invalid float for %s=%r; using default %s", name, raw, default)
+        return default
+
+
+def _utcnow_iso() -> str:
+    """Return a timezone-aware UTC ISO-8601 timestamp."""
+    return datetime.now(timezone.utc).isoformat()
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration (can be overridden via environment variables)
 # ─────────────────────────────────────────────────────────────────────────────
 
-TRADE_BUDGET_USDT = float(os.getenv("PAXG_TRADE_BUDGET_USDT", "100"))   # Max USDT per trade cycle
-STOP_LOSS_PCT = float(os.getenv("PAXG_STOP_LOSS_PCT", "3.0"))           # Stop-loss %
-MAX_DRAWDOWN_PCT = float(os.getenv("PAXG_MAX_DRAWDOWN_PCT", "8.0"))     # Max portfolio drawdown
-COOLDOWN_HOURS = float(os.getenv("PAXG_COOLDOWN_HOURS", "4.0"))         # Min hours between trades
-MIN_SCORE_DELTA = float(os.getenv("PAXG_MIN_SCORE_DELTA", "15.0"))      # Min score change to act
-STATE_FILE = Path(os.getenv("PAXG_STATE_FILE", "/tmp/paxg_state.json"))
+TRADE_BUDGET_USDT = _safe_float_env("PAXG_TRADE_BUDGET_USDT", 100.0)   # Max USDT per trade cycle
+STOP_LOSS_PCT = _safe_float_env("PAXG_STOP_LOSS_PCT", 3.0)              # Stop-loss %
+MAX_DRAWDOWN_PCT = _safe_float_env("PAXG_MAX_DRAWDOWN_PCT", 8.0)        # Max portfolio drawdown
+COOLDOWN_HOURS = _safe_float_env("PAXG_COOLDOWN_HOURS", 4.0)            # Min hours between trades
+MIN_SCORE_DELTA = _safe_float_env("PAXG_MIN_SCORE_DELTA", 15.0)         # Min score change to act
+
+# Default to a repo-local persistent path. ``/tmp`` is wiped on reboot which
+# would silently wipe position/P&L history — a painful surprise in production.
+_DEFAULT_STATE_FILE = str(Path(__file__).resolve().parent.parent / "data" / "paxg_state.json")
+STATE_FILE = Path(os.getenv("PAXG_STATE_FILE", _DEFAULT_STATE_FILE))
 
 SYMBOL = "PAXGUSDT"
 
@@ -54,14 +73,7 @@ SYMBOL = "PAXGUSDT"
 # State Management
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _load_state() -> dict:
-    """Load trading state from JSON file."""
-    if STATE_FILE.exists():
-        try:
-            with open(STATE_FILE) as f:
-                return json.load(f)
-        except Exception:
-            pass
+def _default_state() -> dict:
     return {
         "position_qty": 0.0,
         "avg_entry_price": 0.0,
@@ -75,13 +87,34 @@ def _load_state() -> dict:
     }
 
 
+def _load_state() -> dict:
+    """Load trading state from JSON file, returning defaults on any error."""
+    if STATE_FILE.exists():
+        try:
+            with open(STATE_FILE) as f:
+                loaded = json.load(f)
+            merged = _default_state()
+            merged.update(loaded)
+            return merged
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning(
+                "Failed to load state from %s (%s); starting from defaults",
+                STATE_FILE,
+                e,
+            )
+    return _default_state()
+
+
 def _save_state(state: dict):
-    """Persist trading state to JSON file."""
+    """Persist trading state to JSON file (atomic write)."""
     try:
-        with open(STATE_FILE, "w") as f:
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
+        with open(tmp, "w") as f:
             json.dump(state, f, indent=2)
-    except Exception as e:
-        logger.error(f"Failed to save state: {e}")
+        tmp.replace(STATE_FILE)
+    except OSError as e:
+        logger.error("Failed to save state to %s: %s", STATE_FILE, e)
 
 
 def get_state() -> dict:
@@ -131,12 +164,21 @@ def _compute_sell_qty(signal: str, position_qty: float) -> float:
 def _check_cooldown(state: dict) -> tuple[bool, str]:
     """Returns (ok_to_trade, reason)."""
     last = state.get("last_trade_time")
-    if last:
+    if not last:
+        return True, "OK"
+    try:
         last_dt = datetime.fromisoformat(last)
-        elapsed = (datetime.utcnow() - last_dt).total_seconds() / 3600
-        if elapsed < COOLDOWN_HOURS:
-            remaining = COOLDOWN_HOURS - elapsed
-            return False, f"Cooldown active — {remaining:.1f}h remaining"
+    except ValueError:
+        logger.warning("Invalid last_trade_time %r in state; ignoring cooldown", last)
+        return True, "OK"
+    now = datetime.now(timezone.utc)
+    # Support both legacy naive timestamps and current tz-aware ones.
+    if last_dt.tzinfo is None:
+        last_dt = last_dt.replace(tzinfo=timezone.utc)
+    elapsed = (now - last_dt).total_seconds() / 3600
+    if elapsed < COOLDOWN_HOURS:
+        remaining = COOLDOWN_HOURS - elapsed
+        return False, f"Cooldown active — {remaining:.1f}h remaining"
     return True, "OK"
 
 
@@ -202,7 +244,7 @@ def execute_auto_trade(score_result: dict, dry_run: bool = False) -> dict:
 
     current_price = float(price_result["price"])
     pos_qty = state.get("position_qty", 0.0)
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = _utcnow_iso()
 
     # ── Stop-Loss Check (overrides everything) ─────────────────────────────
     if _check_stop_loss(state, current_price) and pos_qty > 0:

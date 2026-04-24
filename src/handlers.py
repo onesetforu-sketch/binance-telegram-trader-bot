@@ -3,13 +3,12 @@ Telegram bot command and message handlers.
 Each handler corresponds to a bot command or interaction.
 """
 
-import os
 import logging
-from functools import wraps
 from telegram import Update
 from telegram.ext import ContextTypes
 from binance.client import Client as BinanceClient
 
+from src.auth import reply_safe, restricted
 from src.binance_client import (
     get_client,
     get_account_balance,
@@ -24,21 +23,6 @@ from src.binance_client import (
 )
 
 logger = logging.getLogger(__name__)
-
-ALLOWED_USER_ID = int(os.getenv("TELEGRAM_ALLOWED_USER_ID", "0"))
-
-
-def restricted(func):
-    """Decorator to restrict bot access to the allowed user only."""
-    @wraps(func)
-    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        user_id = update.effective_user.id
-        if ALLOWED_USER_ID and user_id != ALLOWED_USER_ID:
-            await update.message.reply_text("⛔ Unauthorized. This bot is private.")
-            logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
-            return
-        return await func(update, context, *args, **kwargs)
-    return wrapped
 
 
 def get_binance_client() -> BinanceClient:
@@ -88,7 +72,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         "_Intervals: 1m, 5m, 15m, 1h, 4h, 1d_"
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await reply_safe(update, text)
 
 
 # ─────────────────────────────────────────────
@@ -105,18 +89,18 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @restricted
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Usage: /price `<SYMBOL>`\nExample: `/price BTCUSDT`", parse_mode="Markdown")
+        await reply_safe(update, "Usage: /price `<SYMBOL>`\nExample: `/price BTCUSDT`")
         return
     symbol = context.args[0].upper()
     client = get_binance_client()
     result = get_ticker_price(client, symbol)
     if result["success"]:
-        await update.message.reply_text(
+        await reply_safe(
+            update,
             f"💰 *{result['symbol']}*\nCurrent Price: `${float(result['price']):,.4f}`",
-            parse_mode="Markdown"
         )
     else:
-        await update.message.reply_text(f"❌ Error: {result['error']}")
+        await reply_safe(update, f"❌ Error: {result['error']}", parse_mode=None)
 
 
 # ─────────────────────────────────────────────
@@ -125,7 +109,7 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @restricted
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Usage: /stats `<SYMBOL>`\nExample: `/stats ETHUSDT`", parse_mode="Markdown")
+        await reply_safe(update, "Usage: /stats `<SYMBOL>`\nExample: `/stats ETHUSDT`")
         return
     symbol = context.args[0].upper()
     client = get_binance_client()
@@ -141,9 +125,9 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Low:         `${float(result['low']):,.4f}`\n"
             f"Volume:      `{float(result['volume']):,.2f}`"
         )
-        await update.message.reply_text(text, parse_mode="Markdown")
+        await reply_safe(update, text)
     else:
-        await update.message.reply_text(f"❌ Error: {result['error']}")
+        await reply_safe(update, f"❌ Error: {result['error']}", parse_mode=None)
 
 
 # ─────────────────────────────────────────────
@@ -155,14 +139,14 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = get_account_balance(client)
     if result["success"]:
         if not result["balances"]:
-            await update.message.reply_text("💼 Your account has no assets with a balance.")
+            await reply_safe(update, "💼 Your account has no assets with a balance.", parse_mode=None)
             return
         lines = ["💼 *Account Balances:*\n"]
         for b in result["balances"]:
             lines.append(f"• *{b['asset']}*: Free `{float(b['free']):.6f}` | Locked `{float(b['locked']):.6f}`")
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        await reply_safe(update, "\n".join(lines))
     else:
-        await update.message.reply_text(f"❌ Error: {result['error']}")
+        await reply_safe(update, f"❌ Error: {result['error']}", parse_mode=None)
 
 
 # ─────────────────────────────────────────────
@@ -171,30 +155,33 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @restricted
 async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /buy `<SYMBOL> <QTY>`\nExample: `/buy BTCUSDT 0.001`", parse_mode="Markdown")
+        await reply_safe(update, "Usage: /buy `<SYMBOL> <QTY>`\nExample: `/buy BTCUSDT 0.001`")
         return
     symbol = context.args[0].upper()
     try:
         qty = float(context.args[1])
     except ValueError:
-        await update.message.reply_text("❌ Invalid quantity. Please enter a number.")
+        await reply_safe(update, "❌ Invalid quantity. Please enter a number.", parse_mode=None)
+        return
+    if qty <= 0:
+        await reply_safe(update, "❌ Quantity must be greater than zero.", parse_mode=None)
         return
 
-    await update.message.reply_text(f"⏳ Placing market BUY order for `{qty}` {symbol}...", parse_mode="Markdown")
+    await reply_safe(update, f"⏳ Placing market BUY order for `{qty}` {symbol}...")
     client = get_binance_client()
     result = place_market_order(client, symbol, "BUY", qty)
     if result["success"]:
         order = result["order"]
-        await update.message.reply_text(
+        await reply_safe(
+            update,
             f"✅ *Market BUY Order Placed!*\n\n"
             f"Symbol:   `{order['symbol']}`\n"
             f"Order ID: `{order['orderId']}`\n"
             f"Status:   `{order['status']}`\n"
             f"Qty:      `{order['executedQty']}`",
-            parse_mode="Markdown"
         )
     else:
-        await update.message.reply_text(f"❌ Order failed: {result['error']}")
+        await reply_safe(update, f"❌ Order failed: {result['error']}", parse_mode=None)
 
 
 # ─────────────────────────────────────────────
@@ -203,30 +190,33 @@ async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @restricted
 async def sell(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /sell `<SYMBOL> <QTY>`\nExample: `/sell BTCUSDT 0.001`", parse_mode="Markdown")
+        await reply_safe(update, "Usage: /sell `<SYMBOL> <QTY>`\nExample: `/sell BTCUSDT 0.001`")
         return
     symbol = context.args[0].upper()
     try:
         qty = float(context.args[1])
     except ValueError:
-        await update.message.reply_text("❌ Invalid quantity. Please enter a number.")
+        await reply_safe(update, "❌ Invalid quantity. Please enter a number.", parse_mode=None)
+        return
+    if qty <= 0:
+        await reply_safe(update, "❌ Quantity must be greater than zero.", parse_mode=None)
         return
 
-    await update.message.reply_text(f"⏳ Placing market SELL order for `{qty}` {symbol}...", parse_mode="Markdown")
+    await reply_safe(update, f"⏳ Placing market SELL order for `{qty}` {symbol}...")
     client = get_binance_client()
     result = place_market_order(client, symbol, "SELL", qty)
     if result["success"]:
         order = result["order"]
-        await update.message.reply_text(
+        await reply_safe(
+            update,
             f"✅ *Market SELL Order Placed!*\n\n"
             f"Symbol:   `{order['symbol']}`\n"
             f"Order ID: `{order['orderId']}`\n"
             f"Status:   `{order['status']}`\n"
             f"Qty:      `{order['executedQty']}`",
-            parse_mode="Markdown"
         )
     else:
-        await update.message.reply_text(f"❌ Order failed: {result['error']}")
+        await reply_safe(update, f"❌ Order failed: {result['error']}", parse_mode=None)
 
 
 # ─────────────────────────────────────────────
@@ -235,31 +225,34 @@ async def sell(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @restricted
 async def limitbuy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 3:
-        await update.message.reply_text("Usage: /limitbuy `<SYMBOL> <QTY> <PRICE>`\nExample: `/limitbuy BTCUSDT 0.001 60000`", parse_mode="Markdown")
+        await reply_safe(update, "Usage: /limitbuy `<SYMBOL> <QTY> <PRICE>`\nExample: `/limitbuy BTCUSDT 0.001 60000`")
         return
     symbol = context.args[0].upper()
     try:
         qty = float(context.args[1])
         price = float(context.args[2])
     except ValueError:
-        await update.message.reply_text("❌ Invalid quantity or price.")
+        await reply_safe(update, "❌ Invalid quantity or price.", parse_mode=None)
+        return
+    if qty <= 0 or price <= 0:
+        await reply_safe(update, "❌ Quantity and price must both be greater than zero.", parse_mode=None)
         return
 
     client = get_binance_client()
     result = place_limit_order(client, symbol, "BUY", qty, price)
     if result["success"]:
         order = result["order"]
-        await update.message.reply_text(
+        await reply_safe(
+            update,
             f"✅ *Limit BUY Order Placed!*\n\n"
             f"Symbol:   `{order['symbol']}`\n"
             f"Order ID: `{order['orderId']}`\n"
             f"Price:    `${price:,.4f}`\n"
             f"Qty:      `{qty}`\n"
             f"Status:   `{order['status']}`",
-            parse_mode="Markdown"
         )
     else:
-        await update.message.reply_text(f"❌ Order failed: {result['error']}")
+        await reply_safe(update, f"❌ Order failed: {result['error']}", parse_mode=None)
 
 
 # ─────────────────────────────────────────────
@@ -268,31 +261,34 @@ async def limitbuy(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @restricted
 async def limitsell(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 3:
-        await update.message.reply_text("Usage: /limitsell `<SYMBOL> <QTY> <PRICE>`\nExample: `/limitsell BTCUSDT 0.001 70000`", parse_mode="Markdown")
+        await reply_safe(update, "Usage: /limitsell `<SYMBOL> <QTY> <PRICE>`\nExample: `/limitsell BTCUSDT 0.001 70000`")
         return
     symbol = context.args[0].upper()
     try:
         qty = float(context.args[1])
         price = float(context.args[2])
     except ValueError:
-        await update.message.reply_text("❌ Invalid quantity or price.")
+        await reply_safe(update, "❌ Invalid quantity or price.", parse_mode=None)
+        return
+    if qty <= 0 or price <= 0:
+        await reply_safe(update, "❌ Quantity and price must both be greater than zero.", parse_mode=None)
         return
 
     client = get_binance_client()
     result = place_limit_order(client, symbol, "SELL", qty, price)
     if result["success"]:
         order = result["order"]
-        await update.message.reply_text(
+        await reply_safe(
+            update,
             f"✅ *Limit SELL Order Placed!*\n\n"
             f"Symbol:   `{order['symbol']}`\n"
             f"Order ID: `{order['orderId']}`\n"
             f"Price:    `${price:,.4f}`\n"
             f"Qty:      `{qty}`\n"
             f"Status:   `{order['status']}`",
-            parse_mode="Markdown"
         )
     else:
-        await update.message.reply_text(f"❌ Order failed: {result['error']}")
+        await reply_safe(update, f"❌ Order failed: {result['error']}", parse_mode=None)
 
 
 # ─────────────────────────────────────────────
@@ -306,7 +302,7 @@ async def openorders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if result["success"]:
         orders = result["orders"]
         if not orders:
-            await update.message.reply_text("📂 No open orders found.")
+            await reply_safe(update, "📂 No open orders found.", parse_mode=None)
             return
         lines = ["📂 *Open Orders:*\n"]
         for o in orders[:10]:
@@ -314,9 +310,9 @@ async def openorders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"• `{o['symbol']}` | ID: `{o['orderId']}` | {o['side']} {o['type']}\n"
                 f"  Qty: `{o['origQty']}` @ `${float(o['price']):,.4f}` | Status: `{o['status']}`"
             )
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        await reply_safe(update, "\n".join(lines))
     else:
-        await update.message.reply_text(f"❌ Error: {result['error']}")
+        await reply_safe(update, f"❌ Error: {result['error']}", parse_mode=None)
 
 
 # ─────────────────────────────────────────────
@@ -325,21 +321,21 @@ async def openorders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @restricted
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /cancel `<SYMBOL> <ORDER_ID>`\nExample: `/cancel BTCUSDT 123456789`", parse_mode="Markdown")
+        await reply_safe(update, "Usage: /cancel `<SYMBOL> <ORDER_ID>`\nExample: `/cancel BTCUSDT 123456789`")
         return
     symbol = context.args[0].upper()
     try:
         order_id = int(context.args[1])
     except ValueError:
-        await update.message.reply_text("❌ Invalid order ID.")
+        await reply_safe(update, "❌ Invalid order ID. Must be an integer.", parse_mode=None)
         return
 
     client = get_binance_client()
     result = cancel_order(client, symbol, order_id)
     if result["success"]:
-        await update.message.reply_text(f"✅ Order `{order_id}` for `{symbol}` has been cancelled.", parse_mode="Markdown")
+        await reply_safe(update, f"✅ Order `{order_id}` for `{symbol}` has been cancelled.")
     else:
-        await update.message.reply_text(f"❌ Error: {result['error']}")
+        await reply_safe(update, f"❌ Error: {result['error']}", parse_mode=None)
 
 
 # ─────────────────────────────────────────────
@@ -348,7 +344,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @restricted
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Usage: /history `<SYMBOL>`\nExample: `/history BTCUSDT`", parse_mode="Markdown")
+        await reply_safe(update, "Usage: /history `<SYMBOL>`\nExample: `/history BTCUSDT`")
         return
     symbol = context.args[0].upper()
     client = get_binance_client()
@@ -356,17 +352,19 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if result["success"]:
         orders = result["orders"]
         if not orders:
-            await update.message.reply_text(f"🕓 No order history found for `{symbol}`.", parse_mode="Markdown")
+            await reply_safe(update, f"🕓 No order history found for `{symbol}`.")
             return
         lines = [f"🕓 *Recent Orders for {symbol}:*\n"]
         for o in orders[-10:]:
+            price_val = float(o.get("price") or 0)
+            price_str = f"${price_val:,.4f}" if price_val > 0 else "market"
             lines.append(
                 f"• ID: `{o['orderId']}` | {o['side']} {o['type']}\n"
-                f"  Qty: `{o['executedQty']}` @ `${float(o['price']):,.4f}` | `{o['status']}`"
+                f"  Qty: `{o['executedQty']}` @ `{price_str}` | `{o['status']}`"
             )
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        await reply_safe(update, "\n".join(lines))
     else:
-        await update.message.reply_text(f"❌ Error: {result['error']}")
+        await reply_safe(update, f"❌ Error: {result['error']}", parse_mode=None)
 
 
 # ─────────────────────────────────────────────
@@ -375,13 +373,17 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @restricted
 async def candles(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Usage: /candles `<SYMBOL> [INTERVAL]`\nExample: `/candles BTCUSDT 1h`", parse_mode="Markdown")
+        await reply_safe(update, "Usage: /candles `<SYMBOL> [INTERVAL]`\nExample: `/candles BTCUSDT 1h`")
         return
     symbol = context.args[0].upper()
     interval = context.args[1] if len(context.args) > 1 else "1h"
     valid_intervals = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w"]
     if interval not in valid_intervals:
-        await update.message.reply_text(f"❌ Invalid interval. Choose from: {', '.join(valid_intervals)}")
+        await reply_safe(
+            update,
+            f"❌ Invalid interval. Choose from: {', '.join(valid_intervals)}",
+            parse_mode=None,
+        )
         return
 
     client = get_binance_client()
@@ -392,6 +394,6 @@ async def candles(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(
                 f"O: `{k['open']}` H: `{k['high']}` L: `{k['low']}` C: `{k['close']}` V: `{k['volume']}`"
             )
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        await reply_safe(update, "\n".join(lines))
     else:
-        await update.message.reply_text(f"❌ Error: {result['error']}")
+        await reply_safe(update, f"❌ Error: {result['error']}", parse_mode=None)

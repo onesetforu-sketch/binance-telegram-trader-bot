@@ -16,10 +16,10 @@ New commands added to the bot:
 
 import os
 import logging
-from functools import wraps
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from src.auth import edit_safe, reply_safe, restricted
 from src.binance_client import get_client
 from src.macro_data import get_full_macro_snapshot
 from src.regime_engine import compute_gold_score
@@ -37,18 +37,20 @@ from src.paxg_trader import (
 )
 
 logger = logging.getLogger(__name__)
-ALLOWED_USER_ID = int(os.getenv("TELEGRAM_ALLOWED_USER_ID", "0"))
 
 
-def restricted(func):
-    @wraps(func)
-    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        user_id = update.effective_user.id
-        if ALLOWED_USER_ID and user_id != ALLOWED_USER_ID:
-            await update.message.reply_text("⛔ Unauthorized.")
-            return
-        return await func(update, context, *args, **kwargs)
-    return wrapped
+def _is_testnet() -> bool:
+    return os.getenv("USE_TESTNET", "True").strip().lower() == "true"
+
+
+def _fmt_num(value, spec: str = ".2f", fallback: str = "N/A") -> str:
+    """Format a numeric value, returning ``fallback`` when it is None/missing."""
+    if value is None:
+        return fallback
+    try:
+        return format(float(value), spec)
+    except (TypeError, ValueError):
+        return fallback
 
 
 def _score_bar(score: float) -> str:
@@ -106,10 +108,11 @@ async def gold_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text += f"{flag}\n"
 
         text += f"\n_Updated: {result['timestamp']}_"
-        await msg.edit_text(text, parse_mode="Markdown")
+        await edit_safe(msg, text)
 
     except Exception as e:
-        await msg.edit_text(f"❌ Analysis failed: {e}")
+        logger.exception("gold_analysis failed")
+        await edit_safe(msg, f"❌ Analysis failed: {e}", parse_mode=None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -134,9 +137,10 @@ async def gold_score(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if result["risk_flags"]:
             text += "\n\n*Risks:*\n" + "\n".join(result["risk_flags"])
 
-        await msg.edit_text(text, parse_mode="Markdown")
+        await edit_safe(msg, text)
     except Exception as e:
-        await msg.edit_text(f"❌ Error: {e}")
+        logger.exception("gold_score failed")
+        await edit_safe(msg, f"❌ Error: {e}", parse_mode=None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -176,9 +180,10 @@ async def gold_regime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += regime_guidance.get(result["regime_code"], "Mixed signals — proceed with caution.")
         text += f"\n\nScore: `{result['composite_score']:+.1f}` | Signal: `{result['signal']}`"
 
-        await msg.edit_text(text, parse_mode="Markdown")
+        await edit_safe(msg, text)
     except Exception as e:
-        await msg.edit_text(f"❌ Error: {e}")
+        logger.exception("gold_regime failed")
+        await edit_safe(msg, f"❌ Error: {e}", parse_mode=None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -214,9 +219,10 @@ async def paxg_position(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Last Trade:    `{summary['last_trade_time']}`\n\n"
             f"Auto-Trade:    {auto_status}"
         )
-        await update.message.reply_text(text, parse_mode="Markdown")
+        await reply_safe(update, text)
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
+        logger.exception("paxg_position failed")
+        await reply_safe(update, f"❌ Error: {e}", parse_mode=None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -225,32 +231,47 @@ async def paxg_position(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        state = get_state()
+    state = get_state()
+    is_testnet = _is_testnet()
+
+    def status_text() -> str:
         status = "✅ ENABLED" if state.get("auto_trade_enabled") else "❌ DISABLED"
-        await update.message.reply_text(
-            f"🤖 *Auto-Trade Status:* {status}\n\n"
+        mode = "🧪 Testnet" if is_testnet else "🔴 *LIVE MAINNET*"
+        return (
+            f"🤖 *Auto-Trade Status:* {status}\n"
+            f"Mode: {mode}\n\n"
             f"Use `/autotrade on` or `/autotrade off` to toggle.\n"
-            f"Use `/dryrun` to simulate a trade without real orders.",
-            parse_mode="Markdown"
+            f"Use `/dryrun` to simulate a trade without real orders."
         )
+
+    if not context.args:
+        await reply_safe(update, status_text())
         return
 
     cmd = context.args[0].lower()
+    if cmd == "status":
+        await reply_safe(update, status_text())
+        return
     if cmd == "on":
         set_auto_trade(True)
-        await update.message.reply_text(
+        warning = (
+            "\n\n🔴 *LIVE TRADING ON MAINNET*\nReal funds will be used."
+            if not is_testnet
+            else "\n\n_Running against Binance Testnet — no real funds at risk._"
+        )
+        await reply_safe(
+            update,
             "✅ *Auto-trading ENABLED.*\n\n"
             "The bot will now automatically trade PAXG/USDT based on the macro regime score.\n"
             "⚠️ Ensure your Binance API key has Spot Trading permissions.\n"
-            "Use `/tradeconfig` to review risk settings.",
-            parse_mode="Markdown"
+            "Use `/tradeconfig` to review risk settings."
+            + warning,
         )
     elif cmd == "off":
         set_auto_trade(False)
-        await update.message.reply_text("❌ *Auto-trading DISABLED.* No new orders will be placed.", parse_mode="Markdown")
+        await reply_safe(update, "❌ *Auto-trading DISABLED.* No new orders will be placed.")
     else:
-        await update.message.reply_text("Usage: `/autotrade on` | `/autotrade off` | `/autotrade status`", parse_mode="Markdown")
+        await reply_safe(update, "Usage: `/autotrade on` | `/autotrade off` | `/autotrade status`")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -259,9 +280,11 @@ async def autotrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def trade_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mode = "🧪 Testnet" if _is_testnet() else "🔴 LIVE MAINNET"
     text = (
         f"⚙️ *Auto-Trade Configuration*\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Mode:            {mode}\n"
         f"Symbol:          `{SYMBOL}`\n"
         f"Trade Budget:    `${TRADE_BUDGET_USDT:.2f} USDT`\n"
         f"Stop-Loss:       `{STOP_LOSS_PCT:.1f}%`\n"
@@ -277,7 +300,7 @@ async def trade_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"WEAK\\_SELL  → 30% of position\n\n"
         f"_Override via environment variables in .env_"
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await reply_safe(update, text)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -312,9 +335,10 @@ async def dry_run(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += "\n*Risk Flags:*\n" + "\n".join(trade["risk_flags"])
 
         text += "\n\n_No real order was placed. Use `/autotrade on` to enable live trading._"
-        await msg.edit_text(text, parse_mode="Markdown")
+        await edit_safe(msg, text)
     except Exception as e:
-        await msg.edit_text(f"❌ Dry-run failed: {e}")
+        logger.exception("dry_run failed")
+        await edit_safe(msg, f"❌ Dry-run failed: {e}", parse_mode=None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -329,16 +353,19 @@ async def gold_risks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         snapshot = get_full_macro_snapshot(client)
         result = compute_gold_score(snapshot)
 
-        ry = snapshot.get("real_yield", {})
-        usd = snapshot.get("usd", {})
+        ry = snapshot.get("real_yield", {}) or {}
+        usd = snapshot.get("usd", {}) or {}
+
+        ry_chg = ry.get("real_yield_5d_chg_bps", 0) or 0
+        usd_chg_5d = usd.get("chg_5d_pct", 0) or 0
 
         text = (
             f"🗺 *Gold Risk Map*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"*Bearish Macro Triggers (ranked):*\n\n"
-            f"1️⃣ Real Yields: `{ry.get('real_yield', 'N/A'):.2f}%` | 5d chg: `{ry.get('real_yield_5d_chg_bps', 0):+.0f} bps`\n"
-            f"   {'🔴 RISING FAST — correction risk elevated' if ry.get('real_yield_5d_chg_bps', 0) > 20 else '✅ Within normal range'}\n\n"
-            f"2️⃣ USD/DXY: `{usd.get('dxy', 'N/A'):.2f}` | 5d: `{usd.get('chg_5d_pct', 0):+.2f}%`\n"
+            f"1️⃣ Real Yields: `{_fmt_num(ry.get('real_yield'), '.2f')}%` | 5d chg: `{ry_chg:+.0f} bps`\n"
+            f"   {'🔴 RISING FAST — correction risk elevated' if ry_chg > 20 else '✅ Within normal range'}\n\n"
+            f"2️⃣ USD/DXY: `{_fmt_num(usd.get('dxy'), '.2f')}` | 5d: `{usd_chg_5d:+.2f}%`\n"
             f"   {'🔴 STRONG UP — gold downside pressure' if usd.get('trend') == 'STRONG_UP' else '✅ No breakout detected'}\n\n"
         )
 
@@ -351,15 +378,16 @@ async def gold_risks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         text += (
             f"\n*Structural Bearish Checklist:*\n"
-            f"{'🔴' if ry.get('real_yield_5d_chg_bps', 0) > 15 else '✅'} Real yields rising persistently\n"
-            f"{'🔴' if usd.get('chg_5d_pct', 0) > 0.8 else '✅'} USD trend breakout\n"
+            f"{'🔴' if ry_chg > 15 else '✅'} Real yields rising persistently\n"
+            f"{'🔴' if usd_chg_5d > 0.8 else '✅'} USD trend breakout\n"
             f"{'⚠' if result['composite_score'] < -20 else '✅'} Macro score deteriorating\n"
-            f"{'🔴' if snapshot.get('positioning', {}).get('crowded_long') else '✅'} Crowded long positioning\n"
+            f"{'🔴' if (snapshot.get('positioning') or {}).get('crowded_long') else '✅'} Crowded long positioning\n"
         )
 
-        await msg.edit_text(text, parse_mode="Markdown")
+        await edit_safe(msg, text)
     except Exception as e:
-        await msg.edit_text(f"❌ Error: {e}")
+        logger.exception("gold_risks failed")
+        await edit_safe(msg, f"❌ Error: {e}", parse_mode=None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -372,20 +400,27 @@ async def trade_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history = state.get("trade_history", [])
 
     if not history:
-        await update.message.reply_text("📋 No auto-trade history yet.")
+        await reply_safe(update, "📋 No auto-trade history yet.", parse_mode=None)
         return
 
     lines = ["📋 *Recent Auto-Trade History (last 10):*\n"]
     for t in history[-10:]:
-        action_emoji = "🟢" if t["action"] == "BUY" else "🔴"
+        action = t.get("action", "?")
+        reason = (t.get("reason") or "").lower()
+        if reason == "stop_loss" or action.startswith("STOP_LOSS"):
+            action_emoji = "🛑"
+        elif action == "BUY":
+            action_emoji = "🟢"
+        else:
+            action_emoji = "🔴"
         pnl_str = f" | P&L: `${t['pnl']:+.4f}`" if "pnl" in t else ""
         lines.append(
-            f"{action_emoji} `{t['action']}` {t.get('qty', '?')} PAXG @ `${t.get('price', 0):,.2f}`"
+            f"{action_emoji} `{action}` {t.get('qty', '?')} PAXG @ `${t.get('price', 0):,.2f}`"
             f"{pnl_str}\n"
             f"  Signal: `{t.get('signal', 'N/A')}` | Score: `{t.get('score', 0):+.1f}`\n"
-            f"  _{t['time']}_\n"
+            f"  _{t.get('time', '')}_\n"
         )
 
     total_pnl = state.get("total_pnl_usdt", 0.0)
     lines.append(f"\n*Total Realized P&L:* `${total_pnl:+.4f} USDT`")
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await reply_safe(update, "\n".join(lines))

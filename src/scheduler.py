@@ -12,12 +12,12 @@ Runs every ANALYSIS_INTERVAL_MINUTES (default: 60 minutes).
 
 import os
 import logging
-import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Bot
 
+from src.auth import get_allowed_user_id
 from src.binance_client import get_client
 from src.macro_data import get_full_macro_snapshot
 from src.regime_engine import compute_gold_score
@@ -25,8 +25,19 @@ from src.paxg_trader import execute_auto_trade, get_state
 
 logger = logging.getLogger(__name__)
 
-ANALYSIS_INTERVAL_MINUTES = int(os.getenv("ANALYSIS_INTERVAL_MINUTES", "60"))
-TELEGRAM_ALLOWED_USER_ID = int(os.getenv("TELEGRAM_ALLOWED_USER_ID", "0"))
+
+def _safe_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name, "")
+    if not raw:
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        logger.warning("Invalid integer for %s=%r; using default %d", name, raw, default)
+        return default
+
+
+ANALYSIS_INTERVAL_MINUTES = max(1, _safe_int_env("ANALYSIS_INTERVAL_MINUTES", 60))
 
 # Track last regime to detect changes
 _last_regime = None
@@ -44,7 +55,8 @@ async def run_analysis_cycle(bot: Bot):
     """
     global _last_regime, _last_signal, _last_risk_flags
 
-    if not TELEGRAM_ALLOWED_USER_ID:
+    allowed_user_id = get_allowed_user_id()
+    if not allowed_user_id:
         logger.warning("TELEGRAM_ALLOWED_USER_ID not set — skipping alerts")
         return
 
@@ -79,11 +91,15 @@ async def run_analysis_cycle(bot: Bot):
         # ── Send alert if warranted ────────────────────────────────────────
         if should_alert:
             msg = _build_alert_message(result, trade_result, regime_changed, signal_changed, new_risks)
-            await bot.send_message(
-                chat_id=TELEGRAM_ALLOWED_USER_ID,
-                text=msg,
-                parse_mode="Markdown"
-            )
+            try:
+                await bot.send_message(
+                    chat_id=allowed_user_id,
+                    text=msg,
+                    parse_mode="Markdown",
+                )
+            except Exception as send_exc:
+                logger.warning("Markdown alert failed (%s); retrying plain", send_exc)
+                await bot.send_message(chat_id=allowed_user_id, text=msg)
             logger.info(f"Alert sent: regime={regime}, signal={signal}, score={score}")
 
         # Update tracking state
@@ -92,15 +108,14 @@ async def run_analysis_cycle(bot: Bot):
         _last_risk_flags = risk_flags
 
     except Exception as e:
-        logger.error(f"Analysis cycle failed: {e}")
+        logger.exception("Analysis cycle failed")
         try:
             await bot.send_message(
-                chat_id=TELEGRAM_ALLOWED_USER_ID,
-                text=f"⚠️ Scheduled analysis cycle failed: `{e}`",
-                parse_mode="Markdown"
+                chat_id=allowed_user_id,
+                text=f"⚠️ Scheduled analysis cycle failed: {e}",
             )
         except Exception:
-            pass
+            logger.exception("Failed to deliver analysis-failure alert")
 
 
 def _build_alert_message(result: dict, trade_result: dict, regime_changed: bool,
@@ -141,7 +156,9 @@ def _build_alert_message(result: dict, trade_result: dict, regime_changed: bool,
         elif action == "SKIPPED":
             lines.append(f"⏸ Trade skipped: _{trade_result.get('reason', '')}_")
 
-    lines.append(f"_Analysis time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_")
+    lines.append(
+        f"_Analysis time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_"
+    )
     return "\n".join(lines)
 
 
