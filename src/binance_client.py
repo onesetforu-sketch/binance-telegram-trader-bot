@@ -1,24 +1,40 @@
 """
 Binance API client wrapper for the Telegram Trader Bot.
 Handles all interactions with the Binance REST API.
+
+All public helpers return a ``dict`` of the shape::
+
+    {"success": True, ...}       # on success
+    {"success": False, "error": "<human-readable string>"}  # on failure
+
+Callers should check ``result["success"]`` and never assume the other keys
+are present on failure.
 """
 
+import logging
 import os
+from typing import Optional
+
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceOrderException
 from dotenv import load_dotenv
 
 load_dotenv()
+logger = logging.getLogger(__name__)
+
+
+def _err(exc: Exception) -> dict:
+    """Normalize an exception into a ``{'success': False, 'error': ...}`` dict."""
+    return {"success": False, "error": str(exc)}
 
 
 def get_client() -> Client:
     """Initialize and return the Binance API client."""
     api_key = os.getenv("BINANCE_API_KEY", "")
     api_secret = os.getenv("BINANCE_API_SECRET", "")
-    use_testnet = os.getenv("USE_TESTNET", "True").lower() == "true"
+    use_testnet = os.getenv("USE_TESTNET", "True").strip().lower() == "true"
 
-    client = Client(api_key, api_secret, testnet=use_testnet)
-    return client
+    return Client(api_key, api_secret, testnet=use_testnet)
 
 
 def get_account_balance(client: Client) -> dict:
@@ -31,7 +47,10 @@ def get_account_balance(client: Client) -> dict:
         ]
         return {"success": True, "balances": balances}
     except BinanceAPIException as e:
-        return {"success": False, "error": str(e)}
+        return _err(e)
+    except Exception as e:
+        logger.exception("get_account_balance failed")
+        return _err(e)
 
 
 def get_ticker_price(client: Client, symbol: str) -> dict:
@@ -40,7 +59,10 @@ def get_ticker_price(client: Client, symbol: str) -> dict:
         ticker = client.get_symbol_ticker(symbol=symbol.upper())
         return {"success": True, "symbol": ticker["symbol"], "price": ticker["price"]}
     except BinanceAPIException as e:
-        return {"success": False, "error": str(e)}
+        return _err(e)
+    except Exception as e:
+        logger.exception("get_ticker_price failed")
+        return _err(e)
 
 
 def get_24h_stats(client: Client, symbol: str) -> dict:
@@ -58,7 +80,10 @@ def get_24h_stats(client: Client, symbol: str) -> dict:
             "last_price": stats["lastPrice"],
         }
     except BinanceAPIException as e:
-        return {"success": False, "error": str(e)}
+        return _err(e)
+    except Exception as e:
+        logger.exception("get_24h_stats failed")
+        return _err(e)
 
 
 def place_market_order(client: Client, symbol: str, side: str, quantity: float) -> dict:
@@ -71,7 +96,10 @@ def place_market_order(client: Client, symbol: str, side: str, quantity: float) 
         )
         return {"success": True, "order": order}
     except (BinanceAPIException, BinanceOrderException) as e:
-        return {"success": False, "error": str(e)}
+        return _err(e)
+    except Exception as e:
+        logger.exception("place_market_order failed")
+        return _err(e)
 
 
 def place_limit_order(client: Client, symbol: str, side: str, quantity: float, price: float) -> dict:
@@ -86,10 +114,13 @@ def place_limit_order(client: Client, symbol: str, side: str, quantity: float, p
         )
         return {"success": True, "order": order}
     except (BinanceAPIException, BinanceOrderException) as e:
-        return {"success": False, "error": str(e)}
+        return _err(e)
+    except Exception as e:
+        logger.exception("place_limit_order failed")
+        return _err(e)
 
 
-def get_open_orders(client: Client, symbol: str = None) -> dict:
+def get_open_orders(client: Client, symbol: Optional[str] = None) -> dict:
     """Get all open orders, optionally filtered by symbol."""
     try:
         if symbol:
@@ -98,7 +129,10 @@ def get_open_orders(client: Client, symbol: str = None) -> dict:
             orders = client.get_open_orders()
         return {"success": True, "orders": orders}
     except BinanceAPIException as e:
-        return {"success": False, "error": str(e)}
+        return _err(e)
+    except Exception as e:
+        logger.exception("get_open_orders failed")
+        return _err(e)
 
 
 def cancel_order(client: Client, symbol: str, order_id: int) -> dict:
@@ -107,7 +141,10 @@ def cancel_order(client: Client, symbol: str, order_id: int) -> dict:
         result = client.cancel_order(symbol=symbol.upper(), orderId=order_id)
         return {"success": True, "result": result}
     except BinanceAPIException as e:
-        return {"success": False, "error": str(e)}
+        return _err(e)
+    except Exception as e:
+        logger.exception("cancel_order failed")
+        return _err(e)
 
 
 def get_order_history(client: Client, symbol: str, limit: int = 10) -> dict:
@@ -116,23 +153,30 @@ def get_order_history(client: Client, symbol: str, limit: int = 10) -> dict:
         orders = client.get_all_orders(symbol=symbol.upper(), limit=limit)
         return {"success": True, "orders": orders}
     except BinanceAPIException as e:
-        return {"success": False, "error": str(e)}
+        return _err(e)
+    except Exception as e:
+        logger.exception("get_order_history failed")
+        return _err(e)
 
 
 def get_klines(client: Client, symbol: str, interval: str = "1h", limit: int = 10) -> dict:
     """Fetch candlestick/kline data for a symbol."""
     try:
         klines = client.get_klines(symbol=symbol.upper(), interval=interval, limit=limit)
-        formatted = []
-        for k in klines:
-            formatted.append({
+        formatted = [
+            {
                 "open_time": k[0],
                 "open": k[1],
                 "high": k[2],
                 "low": k[3],
                 "close": k[4],
                 "volume": k[5],
-            })
+            }
+            for k in klines
+        ]
         return {"success": True, "klines": formatted}
     except BinanceAPIException as e:
-        return {"success": False, "error": str(e)}
+        return _err(e)
+    except Exception as e:
+        logger.exception("get_klines failed")
+        return _err(e)

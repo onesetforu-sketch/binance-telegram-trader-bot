@@ -13,12 +13,26 @@ All data is fetched from Yahoo Finance (free, no API key required) and Binance.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 from typing import Optional
 import yfinance as yf
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+
+def _round(value, digits: int = 2):
+    """Round ``value`` to ``digits`` places, preserving ``None``.
+
+    Prefer this over ``round(x, n) if x else None`` — the latter wrongly maps
+    ``0.0`` and ``False`` to ``None``.
+    """
+    if value is None:
+        return None
+    try:
+        return round(float(value), digits)
+    except (TypeError, ValueError):
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -159,9 +173,9 @@ def get_usd_direction() -> dict:
 
     return {
         "success": True,
-        "dxy": round(current, 3),
-        "chg_5d_pct": round(chg_5d, 2),
-        "chg_20d_pct": round(chg_20d, 2) if chg_20d else None,
+        "dxy": _round(current, 3),
+        "chg_5d_pct": _round(chg_5d, 2),
+        "chg_20d_pct": _round(chg_20d, 2),
         "trend": trend,
     }
 
@@ -219,10 +233,10 @@ def get_liquidity_regime() -> dict:
 
     return {
         "success": True,
-        "spy_price": round(spy_close, 2) if spy_close else None,
-        "spy_ma50": round(spy_ma50, 2) if spy_ma50 else None,
-        "spy_ma200": round(spy_ma200, 2) if spy_ma200 else None,
-        "tlt_10d_chg_pct": round(tlt_chg, 2) if tlt_chg else None,
+        "spy_price": _round(spy_close, 2),
+        "spy_ma50": _round(spy_ma50, 2),
+        "spy_ma200": _round(spy_ma200, 2),
+        "tlt_10d_chg_pct": _round(tlt_chg, 2),
         "tlt_trend": tlt_trend,
         "liquidity_score": score,  # +2 = very bullish, -2 = very bearish
     }
@@ -257,8 +271,8 @@ def get_risk_premium() -> dict:
 
     return {
         "success": True,
-        "vix": round(current, 2),
-        "chg_5d_pct": round(chg_5d, 2) if chg_5d else None,
+        "vix": _round(current, 2),
+        "chg_5d_pct": _round(chg_5d, 2),
         "regime": regime,
         "spike": spike,  # True = sudden fear spike
     }
@@ -334,5 +348,5 @@ def get_full_macro_snapshot(binance_client) -> dict:
         "liquidity": get_liquidity_regime(),
         "risk_premium": get_risk_premium(),
         "positioning": get_paxg_positioning(binance_client),
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }

@@ -24,3 +24,6 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Persistent bot state (default PAXG_STATE_FILE location)
+data/
