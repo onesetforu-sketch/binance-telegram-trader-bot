@@ -3,10 +3,10 @@
 A private, secure Telegram bot that lets you trade and monitor your Binance
 account directly from Telegram — built in Python.
 
-In addition to standard Binance trading commands, the bot ships with a
-**PAXG Gold Auto-Trader**: a 5-factor macro engine that continuously scores
-gold (PAXG/USDT) against real-yield, USD, liquidity, risk-premium, and
-momentum factors and can auto-enter / auto-exit positions on your behalf.
+Ships with a rule-based **Price-Action (PA) Strategy** for PAXG/USDT (gold)
+that marks key liquidity levels, computes session VWAP, confirms breakouts
+with volume, and pushes Telegram alerts when a fresh LONG / SHORT setup
+appears. Alerts only — no orders are placed from the strategy.
 
 ---
 
@@ -29,25 +29,39 @@ momentum factors and can auto-enter / auto-exit positions on your behalf.
 | `/history <SYMBOL>` | View recent order history |
 | `/candles <SYMBOL> [INTERVAL]` | View candlestick data |
 
-### PAXG Gold Auto-Trader
+### PAXG Price-Action Strategy
 
-A 5-factor macro engine that scores gold (PAXG/USDT) on each scheduled cycle
-and can automatically enter/exit positions based on the composite regime score.
+A simple, rule-based intraday strategy for **PAXGUSDT**:
+
+1. **Key levels** are marked before every check:
+   - Yesterday High / Low (prior UTC day)
+   - Asian session High / Low (00:00–09:00 UTC)
+   - Round-number levels every $25 around the current price
+2. **Session VWAP** is anchored at 00:00 UTC and computed from 15-minute klines.
+   - Price **above** VWAP → LONG bias.
+   - Price **below** VWAP → SHORT bias.
+3. **Volume confirmation**: last closed 15m candle volume must be ≥ **1.5×** the 20-bar average.
+4. **Candle confirmation**: the last closed 15m candle must close in the direction of the breakout.
+5. **Session filter**: only trades during **London (07-16 UTC)** or **US (12-21 UTC)** sessions.
+
+Risk-reward target is **1:2**; stop-loss is placed just beyond the broken
+level / swing; take-profit uses the next opposing key level or a 2× risk
+projection, whichever is further.
 
 | Command | Description |
 |---|---|
-| `/goldanalysis` | Full 5-factor macro analysis (real yields, USD, liquidity, risk premium, momentum) |
-| `/goldscore` | Quick composite gold score and signal |
-| `/goldregime` | Current market regime (A / A+ / B / B+ / C / D / MIXED) with guidance |
-| `/goldrisks` | Active bearish triggers and structural risk checklist |
-| `/paxgposition` | Current PAXG position, realized + unrealized P&L |
-| `/autotrade on\|off\|status` | Enable, disable, or inspect auto-trading |
-| `/dryrun` | Simulate a trade based on the current macro score (no real order) |
-| `/tradeconfig` | Show current risk / sizing configuration |
-| `/tradehistory` | Last 10 auto-trade entries with P&L |
+| `/palevels` | Today's key levels: Yesterday H/L, Asia H/L, round levels, session VWAP |
+| `/pasignal` | Current bias (LONG / SHORT / NO_SETUP) with the full rule checklist |
+| `/pastrategy on\|off\|status` | Toggle background alert broadcasting |
 
-A background scheduler also pushes Telegram alerts when the regime or signal
-changes, when a new risk flag appears, or when an auto-trade is executed.
+The background scheduler runs every `ANALYSIS_INTERVAL_MINUTES` minutes
+(default: **15**, matching the signal timeframe). When `/pastrategy on` is
+set, a fresh LONG / SHORT setup (new bias or newly broken level) triggers a
+Telegram alert with entry, stop-loss, take-profit, and the full checklist.
+
+> Note: market data comes from Binance's **public klines endpoint** — no
+> API key is required for the strategy itself. API keys are only needed
+> for manual `/buy`, `/sell`, `/balance` commands.
 
 ---
 
@@ -75,11 +89,14 @@ See the full environment variable reference below.
 ### 4. Get Your Telegram User ID
 Message [@userinfobot](https://t.me/userinfobot) on Telegram to get your numeric user ID.
 
-### 5. Get Binance API Keys
+### 5. Get Binance API Keys (optional for PA strategy)
 1. Log in to [Binance](https://www.binance.com)
 2. Go to **Account → API Management**
 3. Create a new API key with **Spot Trading** permissions
 4. For testing, use the [Binance Testnet](https://testnet.binance.vision/)
+
+The PA strategy uses Binance's public market-data endpoints and needs no
+API key. Keys are only required for the manual trading commands.
 
 ### 6. Run the Bot
 ```bash
@@ -90,6 +107,13 @@ On startup the bot prints a banner with the active mode (Testnet vs. Live
 Mainnet), the scheduler interval, and whether `TELEGRAM_ALLOWED_USER_ID` is
 set — check this output before sending commands.
 
+### 7. Enable alerts
+From Telegram:
+```
+/pastrategy on
+```
+You'll get a Telegram message each time a fresh LONG / SHORT setup appears.
+
 ---
 
 ## ⚙️ Environment Variables
@@ -98,16 +122,16 @@ set — check this output before sending commands.
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | — (required) | Token from [@BotFather](https://t.me/BotFather). |
 | `TELEGRAM_ALLOWED_USER_ID` | `0` (open) | Your numeric Telegram user ID. **Leave unset only for local testing** — if empty, anyone can invoke commands. |
-| `BINANCE_API_KEY` | — (required) | Binance Spot API key. |
-| `BINANCE_API_SECRET` | — (required) | Binance Spot API secret. |
-| `USE_TESTNET` | `True` | `True` = Binance Testnet (paper). `False` = live mainnet with real funds. |
-| `PAXG_TRADE_BUDGET_USDT` | `100` | Max USDT budget per auto-trade cycle. |
-| `PAXG_STOP_LOSS_PCT` | `3.0` | Stop-loss percentage from average entry price. |
-| `PAXG_MAX_DRAWDOWN_PCT` | `8.0` | Max portfolio drawdown (from peak) before new buys are blocked. |
-| `PAXG_COOLDOWN_HOURS` | `4.0` | Minimum hours between consecutive auto-trades. |
-| `PAXG_MIN_SCORE_DELTA` | `15.0` | Composite-score delta required to trigger a new trade. |
-| `ANALYSIS_INTERVAL_MINUTES` | `60` | How often the background macro analysis runs. |
-| `PAXG_STATE_FILE` | `./data/paxg_state.json` | Where position / P&L history is persisted. **Set this to a persistent volume in production** — `/tmp` is wiped on reboot on most hosts. |
+| `BINANCE_API_KEY` | — | Binance Spot API key. Only required for manual `/buy`, `/sell`, `/balance`. |
+| `BINANCE_API_SECRET` | — | Binance Spot API secret. |
+| `USE_TESTNET` | `True` | `True` = Binance Testnet (paper). `False` = live mainnet with real funds. PA strategy always reads market data from mainnet. |
+| `PA_SYMBOL` | `PAXGUSDT` | Symbol analysed by the PA strategy. |
+| `PA_ROUND_STEP` | `25` | Round-number level spacing in USD. |
+| `PA_VOLUME_SPIKE_MULT` | `1.5` | Breakout volume must be ≥ this × 20-bar average. |
+| `PA_RR_RATIO` | `2.0` | Minimum risk-reward ratio on auto-generated TPs. |
+| `PA_RISK_PCT` | `1.0` | Account risk per trade (informational — auto-execute not yet implemented). |
+| `ANALYSIS_INTERVAL_MINUTES` | `15` | How often the background analysis runs. |
+| `PA_STATE_FILE` | `./data/pa_state.json` | Where alert state (enabled flag, last bias / level) is persisted. **Point at a persistent volume in production** — `/tmp` is wiped on reboot. |
 | `LOG_LEVEL` | `INFO` | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
 
 > ⚠ **Never commit your `.env` file.** It is already in `.gitignore`.
@@ -117,7 +141,10 @@ set — check this output before sending commands.
 ## 🛡 Security
 
 - The bot is **restricted to a single Telegram user** via `TELEGRAM_ALLOWED_USER_ID`. Any other user will be denied access, and the attempt is logged.
-- Always start with `USE_TESTNET=True` to validate your setup without risking real funds. Flipping to mainnet triggers additional warnings in `/autotrade on` and `/tradeconfig`.
+- Always start with `USE_TESTNET=True` to validate your setup without risking real funds.
+- The PA strategy is **alert-only** — it never places orders on your behalf.
+- Manual `/buy`, `/sell`, `/limitbuy`, `/limitsell` commands reject non-positive
+  quantities / prices before sending anything to Binance.
 - Never share your `.env` file or API keys.
 
 ---
@@ -129,19 +156,19 @@ set — check this output before sending commands.
 2. Go to [railway.app](https://railway.app) and create a new project from your GitHub repo.
 3. Add all environment variables from `.env` in the Railway dashboard.
 4. Set the start command to: `python main.py`
-5. Attach a volume at `/app/data` (or similar) and set `PAXG_STATE_FILE=/app/data/paxg_state.json` so position state survives redeploys.
+5. Attach a volume at `/app/data` (or similar) and set `PA_STATE_FILE=/app/data/pa_state.json` so alert state survives redeploys.
 
 ### Option B: Render
 1. Push to GitHub.
 2. Create a new **Background Worker** on [render.com](https://render.com).
 3. Set build command: `pip install -r requirements.txt`
 4. Set start command: `python main.py`
-5. Add environment variables in the Render dashboard. Point `PAXG_STATE_FILE` at a persistent disk.
+5. Add environment variables in the Render dashboard. Point `PA_STATE_FILE` at a persistent disk.
 
 ### Option C: VPS (e.g., DigitalOcean, Linode)
 ```bash
-# Run under systemd or screen — /tmp is often wiped, so keep PAXG_STATE_FILE
-# under a persistent path like /var/lib/trader-bot/state.json.
+# Run under systemd or screen — /tmp is often wiped, so keep PA_STATE_FILE
+# under a persistent path like /var/lib/trader-bot/pa_state.json.
 screen -S traderbot
 python main.py
 # Press Ctrl+A then D to detach
@@ -159,17 +186,19 @@ binance-telegram-trader-bot/
 │   ├── auth.py              # Shared @restricted + safe-reply helpers
 │   ├── binance_client.py    # Binance API wrapper (all success/error dicts)
 │   ├── handlers.py          # Standard Binance Telegram command handlers
-│   ├── macro_data.py        # Factor data fetchers (Yahoo Finance + Binance)
-│   ├── regime_engine.py     # 5-factor composite scoring / regime classifier
-│   ├── paxg_trader.py       # Auto-trade execution, state, risk gates
-│   ├── paxg_handlers.py     # PAXG Telegram command handlers
-│   └── scheduler.py         # APScheduler macro-analysis cycle + alerts
-├── data/                    # (created at runtime) persisted PAXG state
+│   ├── pa_strategy.py       # Price-action engine (key levels, VWAP, signals)
+│   ├── pa_handlers.py       # PA Telegram command handlers
+│   └── scheduler.py         # APScheduler periodic analysis + alerts
+├── data/                    # (created at runtime) persisted PA state
 ├── requirements.txt
 ├── .env.example
 ├── .gitignore
 └── README.md
 ```
+
+The previous `macro_data.py`, `regime_engine.py`, `paxg_trader.py`, and
+`paxg_handlers.py` modules from the PAXG macro engine are no longer wired
+into `main.py`; the bot now runs the PA strategy exclusively.
 
 ---
 
