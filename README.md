@@ -69,6 +69,22 @@ python main.py
 
 ---
 
+## 📱 PAXG Trader Control Android Dashboard
+
+The mobile dashboard connects through a **protected bridge service**. It never stores `BINANCE_API_KEY`, `BINANCE_API_SECRET`, or `TELEGRAM_BOT_TOKEN` in the APK. Configure those values only in your deployment host’s environment variables.
+
+To run the Telegram bot, scheduler, and authenticated mobile bridge together, deploy this command instead of `python main.py`:
+
+```bash
+uvicorn bridge_app:app --host 0.0.0.0 --port ${PORT:-8000}
+```
+
+In addition to the existing bot variables, set a new long and random `DASHBOARD_ACCESS_KEY`. Enter the deployment’s HTTPS URL and this **separate dashboard key** in the PAXG Trader Control app’s Secure Connection screen. Do not enter Binance or Telegram credentials in the mobile app.
+
+For persistent P&L and trade history, mount a server volume and set `PAXG_STATE_FILE=/data/paxg_state.json`. The `health` route is public for host health checks; every `/v1/*` dashboard route requires `Authorization: Bearer <DASHBOARD_ACCESS_KEY>`.
+
+---
+
 ## 🛡️ Security
 
 - The bot is **restricted to a single Telegram user** via `TELEGRAM_ALLOWED_USER_ID`. Any other user will be denied access.
